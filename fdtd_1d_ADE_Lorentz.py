@@ -19,8 +19,9 @@ class FDTD1D_Maxwell:
         self.time_tot = time_tot
         self.c = c
         self.dx = dx
-        self.S = S
+        self.S = 0.2
         self.dt = S * dx / c
+        self.signal_inc = np.zeros(time_tot)
 
         # --- тепер eps — СКАЛЯР ---
         self.eps = eps
@@ -54,11 +55,11 @@ class FDTD1D_Maxwell:
         # self.delta_eps = self.eps_s - self.eps_inf  # = 3.0
         # self.tau = 10.0  # або 10.0
 
-        self.eps_inf = 2.0
-        self.eps_s = 4.0
-        self.omega0 = 2 * np.pi * 5
-        self.delta = 0.05 * self.omega0
-        self.delta_eps = self.eps_s - self.eps_inf  # = 3.0
+        self.eps_inf = 1.5
+        self.eps_s = 6.0
+        self.omega0 = 0.35
+        self.delta = 0.03
+        self.delta_eps = 0.5
 
         # self.delta2tau = self.dt / self.tau
         # self.k = (2 - self.delta2tau) / (2 + self.delta2tau)
@@ -118,7 +119,7 @@ class FDTD1D_Maxwell:
         t = self.t_step * self.dt
         zL = self.iL * self.dx
 
-        self.H[self.iL - 1] -= (self.dt / (self.mu * self.dx)) * self.src_E(t, zL)
+        self.H[self.iL - 1] += (self.dt / (self.mu * self.dx)) * self.src_E(t, zL)
 
     def update_E(self):
         curl = (self.H[1:] - self.H[:-1]) / self.dx
@@ -173,7 +174,7 @@ class FDTD1D_Maxwell:
 
         zLh = (self.iL - 0.5) * self.dx
 
-        self.E[self.iL] -= (self.dt / (self.eps * self.dx)) * self.src_H(t_half, zLh)
+        self.E[self.iL] += (self.dt / (self.eps * self.dx)) * self.src_H(t_half, zLh)
 
     def apply_BC(self):
         self.E[0] = self.H[0]
@@ -184,25 +185,86 @@ class FDTD1D_Maxwell:
             self.signal_ref[self.t_step] = self.E[self.probe_ref]
             self.signal_trn[self.t_step] = self.E[self.probe_trn]
 
+    def record_incident(self): 
+        t = self.t_step * self.dt
+        z = self.probe_ref * self.dx
+
+        self.signal_inc[self.t_step] = self.src_E(t, z)
+
     def epsilon(self, omega):
-        return self.eps_inf + (self.delta_eps * self.omega0 ** 2) / ( self.omega0 ** 2 + 2j * omega * self.delta - omega * omega)
+        return self.eps_inf + (self.delta_eps * self.omega0 ** 2) / (self.omega0 ** 2 - omega ** 2 + 2j * self.delta * omega)
 
 
     def spectrum(self):
-        ref_spectrum = np.fft.fftshift(np.fft.fft(self.signal_ref))
-        trn_spectrum = np.fft.fftshift(np.fft.fft(self.signal_trn))
-        freq = np.fft.fftshift(np.fft.fftfreq(len(ref_spectrum), d=self.dt))
+
+        inc_fft = np.fft.fftshift(np.fft.fft(self.signal_inc))
+        ref_fft = np.fft.fftshift(np.fft.fft(self.signal_ref))
+        trn_fft = np.fft.fftshift(np.fft.fft(self.signal_trn))
+
+        freq = np.fft.fftshift(np.fft.fftfreq(len(inc_fft), d=self.dt))
         pos = freq > 0
-        omega = 2 * np.pi * freq[pos]
 
-        plt.figure()
+        freq = freq[pos] 
+        omega = 2 * np.pi * freq
 
-        plt.plot(omega, self.dt * np.abs(ref_spectrum[pos]), 'o', color='r', markersize=4,
-                 label="reflected spectrum")
-        plt.plot(omega, self.dt * np.abs(trn_spectrum[pos]), 'o', color='b', markersize=4,
-                 label="transmitted spectrum")
-        plt.plot(omega, self.spectrum(omega).real, color='g', label="transmitted spectrum")
+        inc_spec = np.abs(inc_fft[pos])
+        ref_spec = np.abs(ref_fft[pos])
+        trn_spec = np.abs(trn_fft[pos])
+
+        # --- коефіцієнти ---
+
+        R = (ref_spec / (inc_spec + 1e-12)) ** 2
+        T = (trn_spec / (inc_spec + 1e-12)) ** 2
+
+        eps_lorentz = self.epsilon(omega)
+
+        # =====================================
+        # 1. Спектри
+        # =====================================
+
+        plt.figure(figsize=(10, 6))
+ 
+        plt.plot(omega, inc_spec, label='Incident spectrum')
+
+        plt.plot(omega, ref_spec, label='Reflected spectrum')
+
+        plt.plot(omega, trn_spec, label='Transmitted spectrum')
+
+        plt.xlabel('omega')
+        plt.ylabel('Amplitude')
+        plt.grid()
         plt.legend()
+
+        # =====================================
+        # 2. Проходження та відбиття
+        # =====================================
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(omega, R, label='Reflection R')
+        plt.plot(omega, T, label='Transmission T')
+
+        plt.xlabel('omega')
+        plt.ylabel('Coefficient')
+
+        plt.ylim(0, 1.2)
+        plt.grid()
+        plt.legend()
+
+        # =====================================
+        # 3. Дійсна та уявна частина epsilon
+        # =====================================
+
+        plt.figure(figsize=(10, 6))
+
+        plt.plot(omega, eps_lorentz.real, label='Re(epsilon)')
+
+        plt.plot(omega, eps_lorentz.imag, label='Im(epsilon)') 
+        plt.xlabel('omega')
+        plt.ylabel('epsilon')
+
+        plt.grid()
+        plt.legend()
+
         plt.show()
 
     def step(self):
@@ -217,6 +279,7 @@ class FDTD1D_Maxwell:
         self.apply_TFSF_E()
         self.apply_BC()
         self.record()
+        self.record_incident()
 
         self.E_old[:] = E_prev
         self.J_old[:] = J_prev
